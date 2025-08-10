@@ -23,7 +23,8 @@ fn main() -> std::io::Result<()> {
         thread::spawn(move || {
             let mut buffer = [0; 512];
             let thread_addr = stream.peer_addr().unwrap();
-            println!("{thread_addr}");
+
+            println!("Client ({thread_addr}) joined");
 
             loop {
                 match stream.read(&mut buffer) {
@@ -31,8 +32,9 @@ fn main() -> std::io::Result<()> {
                     Ok(bytes_read) => {
                         let input = String::from_utf8_lossy(&buffer[..bytes_read]);
                         let mut clients = clients.lock().unwrap();
+                        clients.retain(|client| client.peer_addr().is_ok());
+
                         for client in clients.iter_mut() {
-                            dbg!("{client}");
                             if client.peer_addr().unwrap() != thread_addr {
                                 client.write_all(input.as_bytes()).unwrap();
                             }
@@ -45,6 +47,7 @@ fn main() -> std::io::Result<()> {
             stream
                 .shutdown(std::net::Shutdown::Both)
                 .expect("Unable to shutdown");
+
             println!("Client ({thread_addr}) discounted");
         });
     }
