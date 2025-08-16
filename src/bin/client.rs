@@ -9,6 +9,7 @@ use std::{
 fn main() -> std::io::Result<()> {
     let mut args = env::args();
 
+    // Extract args
     args.next();
     let command = args.next().expect("Command not found");
     if command != "connect" {
@@ -23,16 +24,17 @@ fn main() -> std::io::Result<()> {
     // Clone stream and move into one thread to perform reading broadcasted message
     let mut read_stream = stream.try_clone()?;
 
-    let (sender, receiver) = mpsc::channel();
+    // Channels for inter-thread communication (for 2 threads)
+    let (server_tx, main_rx) = mpsc::channel::<String>();
+    let (input_tx, input_rx) = mpsc::channel::<String>();
 
-    // Spawning thread for reading
+    // Thread: for reading from server
     thread::spawn(move || {
         let mut buffer = [0; 512];
         loop {
             match read_stream.read(&mut buffer) {
                 Ok(0) => {
-                    println!("Server closed connection");
-                    let _ = sender.send(());
+                    let _ = server_tx.send("Server closed connections".into());
                     break;
                 }
                 Ok(bytes_read) => {
@@ -40,38 +42,49 @@ fn main() -> std::io::Result<()> {
                     println!("{input}");
                 }
                 Err(_) => {
-                    let _ = sender.send(());
+                    let _ = server_tx.send("Connection error".into());
                     break;
                 }
             }
         }
-        read_stream
-            .shutdown(std::net::Shutdown::Both)
-            .expect("Unable to shutdown connection");
-        println!("Leaved Server");
     });
 
-    // Main thread for writing
+    // Thread: for reading user input
+    thread::spawn(move || {
+        loop {
+            print!("> ");
+            let _ = stdout().flush();
+
+            let mut input = String::new();
+            if stdin().read_line(&mut input).is_err() {
+                break;
+            }
+
+            if input.trim().eq_ignore_ascii_case("quit") {
+                let _ = input_tx.send("quit".into());
+                break;
+            }
+
+            let _ = input_tx.send(input);
+        }
+    });
+
+    // Main thread: continuously tracking for exiting msg from channels
     loop {
-        if receiver.try_recv().is_ok() {
+        if let Ok(server_msg) = main_rx.try_recv() {
+            println!("{server_msg}");
             break;
         }
 
-        print!("> ");
-        stdout().flush()?;
-
-        let mut input = String::new();
-        stdin().read_line(&mut input)?;
-
-        if input.trim().eq_ignore_ascii_case("quit") {
-            stream
-                .shutdown(std::net::Shutdown::Both)
-                .expect("Unable to shutdown connection");
-            println!("Leaved Server");
-            break;
+        if let Ok(input_msg) = input_rx.try_recv() {
+            if input_msg.trim().eq_ignore_ascii_case("quit") {
+                println!("Leaved Server");
+                break;
+            }
+            stream.write_all(input_msg.as_bytes())?;
         }
 
-        stream.write_all(input.as_bytes())?;
+        thread::sleep(std::time::Duration::from_millis(50));
     }
 
     Ok(())
