@@ -39,7 +39,8 @@ fn main() -> std::io::Result<()> {
                 }
                 Ok(bytes_read) => {
                     let input = String::from_utf8_lossy(&buffer[..bytes_read]);
-                    println!("{input}");
+                    print!("> {input}");
+                    let _ = stdout().flush();
                 }
                 Err(_) => {
                     let _ = server_tx.send("Connection error".into());
@@ -52,9 +53,6 @@ fn main() -> std::io::Result<()> {
     // Thread: for reading user input
     thread::spawn(move || {
         loop {
-            print!("> ");
-            let _ = stdout().flush();
-
             let mut input = String::new();
             if stdin().read_line(&mut input).is_err() {
                 break;
