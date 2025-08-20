@@ -19,6 +19,13 @@ fn main() -> std::io::Result<()> {
 
     // Connect to Server
     let mut stream = TcpStream::connect(ip_addr_port)?;
+
+    // Set username and write to server
+    let mut username = String::new();
+    println!("Enter your username: ");
+    stdin().read_line(&mut username).expect("Invalid username");
+    stream.write_all(username.as_bytes())?;
+
     println!("Joined Server (\"quit\" to leave)");
 
     // Clone stream and move into one thread to perform reading broadcasted message
@@ -39,7 +46,7 @@ fn main() -> std::io::Result<()> {
                 }
                 Ok(bytes_read) => {
                     let input = String::from_utf8_lossy(&buffer[..bytes_read]);
-                    print!("> {input}");
+                    print!("{input}");
                     let _ = stdout().flush();
                 }
                 Err(_) => {

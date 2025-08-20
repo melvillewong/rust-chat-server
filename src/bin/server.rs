@@ -13,7 +13,7 @@ fn main() -> std::io::Result<()> {
 
     for stream in listener.incoming() {
         let mut stream = stream?;
-        println!("New client connected!");
+        let thread_addr = stream.peer_addr().unwrap();
 
         let clients = Arc::clone(&clients);
         let stream_clone = stream.try_clone()?;
@@ -22,9 +22,14 @@ fn main() -> std::io::Result<()> {
 
         thread::spawn(move || {
             let mut buffer = [0; 512];
-            let thread_addr = stream.peer_addr().unwrap();
 
-            println!("Client ({thread_addr}) joined");
+            // Read client's username
+            let mut name_buffer = [0; 128];
+            let name_bytes = stream.read(&mut name_buffer).unwrap();
+            let username = String::from_utf8_lossy(&name_buffer[..name_bytes]);
+            let username = username.trim_end();
+
+            println!("New client [{}] connected!", username);
 
             loop {
                 match stream.read(&mut buffer) {
@@ -34,9 +39,10 @@ fn main() -> std::io::Result<()> {
                         let mut clients = clients.lock().unwrap();
                         clients.retain(|client| client.peer_addr().is_ok());
 
+                        let fmt_msg = format!("[{}]: {}", username, input);
                         for client in clients.iter_mut() {
                             if client.peer_addr().unwrap() != thread_addr {
-                                client.write_all(input.as_bytes()).unwrap();
+                                client.write_all(fmt_msg.as_bytes()).unwrap();
                             }
                         }
                     }
