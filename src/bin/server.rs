@@ -1,7 +1,7 @@
 use std::{
     io::{Read, Write},
     net::{TcpListener, TcpStream},
-    sync::{Arc, Mutex},
+    sync::{Arc, RwLock},
     thread,
 };
 
@@ -9,7 +9,7 @@ fn main() -> std::io::Result<()> {
     let listener = TcpListener::bind("127.0.0.1:9000")?;
     println!("Server listening on 127.0.0.1:9000");
 
-    let clients = Arc::new(Mutex::new(Vec::<TcpStream>::new()));
+    let clients = Arc::new(RwLock::new(Vec::<TcpStream>::new()));
 
     for stream in listener.incoming() {
         let mut stream = stream?;
@@ -18,7 +18,7 @@ fn main() -> std::io::Result<()> {
         let clients = Arc::clone(&clients);
         let stream_clone = stream.try_clone()?;
 
-        clients.lock().unwrap().push(stream_clone);
+        clients.write().unwrap().push(stream_clone);
 
         thread::spawn(move || {
             let mut buffer = [0; 512];
@@ -26,8 +26,12 @@ fn main() -> std::io::Result<()> {
             // Read client's username
             let mut name_buffer = [0; 128];
             let name_bytes = stream.read(&mut name_buffer).unwrap();
-            let username = String::from_utf8_lossy(&name_buffer[..name_bytes]);
-            let username = username.trim_end();
+            let mut username = String::from_utf8_lossy(&name_buffer[..name_bytes])
+                .trim_end()
+                .to_string();
+            if username.is_empty() {
+                username = format!("user#{}", clients.read().unwrap().len());
+            }
 
             println!("New client [{}] connected!", username);
 
@@ -36,7 +40,7 @@ fn main() -> std::io::Result<()> {
                     Ok(0) => break,
                     Ok(bytes_read) => {
                         let input = String::from_utf8_lossy(&buffer[..bytes_read]);
-                        let mut clients = clients.lock().unwrap();
+                        let mut clients = clients.write().unwrap();
                         clients.retain(|client| client.peer_addr().is_ok());
 
                         let fmt_msg = format!("[{}]: {}", username, input);
