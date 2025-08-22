@@ -43,7 +43,10 @@ fn main() -> std::io::Result<()> {
                         let mut clients = clients.write().unwrap();
                         clients.retain(|client| client.peer_addr().is_ok());
 
-                        let fmt_msg = format!("[{}]: {}", username, input);
+                        let now = chrono::Local::now();
+                        let ts = now.format("[%Y-%m-%d %H:%M:%S]").to_string();
+
+                        let fmt_msg = format!("{} [{}]: {}", ts, username, input);
                         for client in clients.iter_mut() {
                             if client.peer_addr().unwrap() != thread_addr {
                                 client.write_all(fmt_msg.as_bytes()).unwrap();
