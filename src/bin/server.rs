@@ -1,21 +1,35 @@
 use std::{
+    collections::VecDeque,
+    fs::OpenOptions,
     io::{Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
-    sync::{Arc, RwLock},
+    sync::{Arc, Mutex, RwLock},
     thread,
 };
+
+use chrono::{DateTime, Local};
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize, Clone)]
+struct Message {
+    client: String,
+    msg: String,
+    timestamp: DateTime<Local>,
+}
 
 fn main() -> std::io::Result<()> {
     let listener = TcpListener::bind("127.0.0.1:9000")?;
     println!("Server listening on 127.0.0.1:9000");
 
     let clients = Arc::new(RwLock::new(Vec::<(SocketAddr, TcpStream)>::new()));
+    let msg_history = Arc::new(Mutex::new(VecDeque::<Message>::new()));
 
     for stream in listener.incoming() {
         let mut stream = stream?;
         let thread_addr = stream.peer_addr().unwrap();
 
         let clients = Arc::clone(&clients);
+        let msg_hist_clone = Arc::clone(&msg_history);
         let stream_clone = stream.try_clone()?;
 
         clients.write().unwrap().push((thread_addr, stream_clone));
@@ -51,6 +65,21 @@ fn main() -> std::io::Result<()> {
                                 client.write_all(fmt_msg.as_bytes()).unwrap();
                             }
                         }
+
+                        let stored_msg = Message {
+                            client: username.clone(),
+                            msg: fmt_msg,
+                            timestamp: now,
+                        };
+                        msg_hist_clone.lock().unwrap().push_back(stored_msg.clone());
+                        let mut file = OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open("history.txt")
+                            .expect("cannot open file");
+                        let json =
+                            serde_json::to_string(&stored_msg).expect("Serialisation failed");
+                        writeln!(file, "{}", json).expect("Write failed");
                     }
                     Err(_) => break,
                 }
