@@ -71,9 +71,6 @@ nc localhost 7878
 ---
 
 ## 🔮 Future Improvements
-- User authentication & nicknames
-- Private messages
 - Command system (`/quit`, `/nick`, etc.)
 - WebSocket support
-- GUI client
 - (Optional) Async runtime: [Tokio](https://tokio.rs)  
