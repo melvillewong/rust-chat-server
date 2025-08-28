@@ -1,53 +1,51 @@
-use std::{
-    io::Read,
-    net::{SocketAddr, TcpListener, TcpStream},
-    sync::{Arc, RwLock},
-    thread,
+use std::{net::SocketAddr, sync::Arc};
+
+use rust_chat_server::{boardcast_leave_notification, boardcast_msg_and_store, fmt_username};
+use tokio::{
+    io::AsyncReadExt,
+    net::{TcpListener, tcp::OwnedWriteHalf},
+    sync::RwLock,
 };
 
-use tcp_chat_server::{boardcast_leave_notification, boardcast_msg_and_store, fmt_username};
+pub type Clients = Arc<RwLock<Vec<(OwnedWriteHalf, SocketAddr)>>>;
 
-fn main() -> std::io::Result<()> {
-    let listener = TcpListener::bind("127.0.0.1:9000")?;
+#[tokio::main]
+async fn main() -> std::io::Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:9000").await?;
     println!("listening on 127.0.0.1:9000...");
 
-    let clients = Arc::new(RwLock::new(Vec::<(SocketAddr, TcpStream)>::new()));
+    let clients: Clients = Arc::new(RwLock::new(Vec::new()));
 
-    for stream in listener.incoming() {
-        let mut stream = stream?;
-        let socket_addr = stream.peer_addr().unwrap();
-
+    while let Ok((socket, addr)) = listener.accept().await {
         let clients = Arc::clone(&clients);
-        let stream_clone = stream.try_clone()?;
 
-        clients.write().unwrap().push((socket_addr, stream_clone));
+        let (mut reader, writer) = socket.into_split();
 
-        thread::spawn(move || {
+        {
+            let mut guard = clients.write().await;
+            guard.push((writer, addr));
+        }
+
+        tokio::spawn(async move {
             let mut buffer = [0; 512];
 
             // Read client's username
-            let username = fmt_username(&clients, &mut stream);
+            let username = fmt_username(&clients, &mut reader).await;
             println!("New client [{}] connected!", username);
 
             loop {
-                match stream.read(&mut buffer) {
+                match reader.read(&mut buffer).await {
                     Ok(0) => break,
                     Ok(bytes_read) => {
                         let input = String::from_utf8_lossy(&buffer[..bytes_read]);
-                        let mut client_guard = clients.write().unwrap();
 
-                        boardcast_msg_and_store(
-                            &mut client_guard,
-                            username.clone(),
-                            &input,
-                            socket_addr,
-                        );
+                        boardcast_msg_and_store(&clients, username.clone(), &input, addr).await;
                     }
                     Err(_) => break,
                 }
             }
 
-            boardcast_leave_notification(&clients, socket_addr, &username);
+            boardcast_leave_notification(&clients, addr, &username).await;
         });
     }
 

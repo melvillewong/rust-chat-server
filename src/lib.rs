@@ -1,13 +1,18 @@
-use std::{
-    fs::OpenOptions,
-    io::{Read, Write},
-    net::{SocketAddr, TcpStream},
-    sync::{Arc, RwLock, RwLockWriteGuard},
-};
+use std::{net::SocketAddr, sync::Arc};
 
 use serde::{Deserialize, Serialize};
+use tokio::{
+    fs::OpenOptions,
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::{
+        TcpStream,
+        tcp::{OwnedReadHalf, OwnedWriteHalf},
+    },
+    sync::{Mutex, RwLock, RwLockReadGuard},
+};
 
-pub type Clients = Arc<RwLock<Vec<(SocketAddr, TcpStream)>>>;
+pub type Clients = Arc<RwLock<Vec<(OwnedWriteHalf, SocketAddr)>>>;
+pub type ClientGuard<'a> = RwLockReadGuard<'a, Vec<(Arc<Mutex<TcpStream>>, SocketAddr)>>;
 
 #[derive(Serialize, Deserialize, Clone)]
 struct Message {
@@ -16,38 +21,44 @@ struct Message {
     timestamp: String,
 }
 
-pub fn fmt_username(clients: &Clients, stream: &mut TcpStream) -> String {
+pub async fn fmt_username(clients: &Clients, stream: &mut OwnedReadHalf) -> String {
     let mut name_buffer = [0; 128];
-    let name_bytes = stream.read(&mut name_buffer).unwrap();
-    let mut username = String::from_utf8_lossy(&name_buffer[..name_bytes])
-        .trim_end()
-        .to_string();
+    let name_bytes = stream.read(&mut name_buffer).await.unwrap_or(0);
+    let mut username = if name_bytes > 0 {
+        String::from_utf8_lossy(&name_buffer[..name_bytes])
+            .trim_end()
+            .to_string()
+    } else {
+        String::new()
+    };
     if username.is_empty() {
-        username = format!("user#{}", clients.read().unwrap().len());
+        username = format!("user#{}", clients.read().await.len());
     }
     username
 }
 
-pub fn boardcast_msg_and_store(
-    client_guard: &mut RwLockWriteGuard<Vec<(SocketAddr, TcpStream)>>,
+pub async fn boardcast_msg_and_store(
+    clients: &Clients,
     username: String,
     input: &str,
     socket_addr: SocketAddr,
 ) {
     let now = chrono::Local::now();
     let ts = now.format("[%Y-%m-%d %H:%M:%S]").to_string();
-
     let fmt_msg = format!("{} [{}]: {}", ts, username, input);
-    for (addr, client) in client_guard.iter_mut() {
+
+    let mut guard = clients.write().await;
+
+    for (writer, addr) in guard.iter_mut() {
         if *addr != socket_addr {
-            client.write_all(fmt_msg.as_bytes()).unwrap();
+            let _ = writer.write_all(fmt_msg.as_bytes()).await;
         }
     }
 
-    store_msg(username, input.trim_end().to_string(), ts);
+    store_msg(username, input.trim_end().to_string(), ts).await;
 }
 
-fn store_msg(client: String, msg: String, timestamp: String) {
+async fn store_msg(client: String, msg: String, timestamp: String) {
     let stored_msg = Message {
         client,
         msg,
@@ -57,18 +68,28 @@ fn store_msg(client: String, msg: String, timestamp: String) {
         .create(true)
         .append(true)
         .open("history.txt")
+        .await
         .expect("cannot open file");
     let json = serde_json::to_string(&stored_msg).expect("Serialisation failed");
-    writeln!(file, "{}", json).expect("Write failed");
+    file.write_all(json.as_bytes()).await.expect("Write failed");
+    file.write_all(b"\n").await.expect("Write failed");
+
+    println!("Stored: {}", json);
 }
 
-pub fn boardcast_leave_notification(clients: &Clients, socket_addr: SocketAddr, username: &str) {
-    let mut clients = clients.write().unwrap();
-    clients.retain(|(addr, _)| *addr != socket_addr);
-    for (_, client) in clients.iter_mut() {
-        client
-            .write_all(format!("[{}] leaved the server\n", username).as_bytes())
-            .unwrap();
+pub async fn boardcast_leave_notification(
+    clients: &Clients,
+    socket_addr: SocketAddr,
+    username: &str,
+) {
+    let mut guard = clients.write().await;
+    guard.retain(|(_, addr)| *addr != socket_addr);
+
+    for (writer, _) in guard.iter_mut() {
+        let msg = format!("[{}] left the server\n", username);
+        if let Err(e) = writer.write_all(msg.as_bytes()).await {
+            eprintln!("Failed to send leave message: {}", e);
+        }
     }
 
     let fmt_msg = chrono::Local::now()
