@@ -1,12 +1,16 @@
 use std::{
     env,
-    io::{Read, Write, stdin, stdout},
-    net::TcpStream,
-    sync::mpsc,
-    thread,
+    io::{Write, stdin, stdout},
 };
 
-fn main() -> std::io::Result<()> {
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpStream,
+    sync::mpsc,
+};
+
+#[tokio::main]
+async fn main() -> std::io::Result<()> {
     let mut args = env::args();
 
     // Extract args
@@ -18,30 +22,28 @@ fn main() -> std::io::Result<()> {
     let ip_addr_port = args.next().expect("IpAddr is expected");
 
     // Connect to Server
-    let mut stream = TcpStream::connect(ip_addr_port)?;
+    let socket = TcpStream::connect(ip_addr_port).await?;
+    let (mut reader, mut writer) = socket.into_split();
 
     // Set username and write to server
     let mut username = String::new();
     println!("Enter your username: ");
     stdin().read_line(&mut username).expect("Invalid username");
-    stream.write_all(username.as_bytes())?;
+    writer.write_all(username.as_bytes()).await?;
 
     println!("Joined Server (\"quit\" to leave)");
 
-    // Clone stream and move into one thread to perform reading broadcasted message
-    let mut read_stream = stream.try_clone()?;
-
     // Channels for inter-thread communication (for 2 threads)
-    let (server_tx, main_rx) = mpsc::channel::<String>();
-    let (input_tx, input_rx) = mpsc::channel::<String>();
+    let (server_tx, mut main_rx) = mpsc::channel::<String>(256);
+    let (input_tx, mut input_rx) = mpsc::channel::<String>(256);
 
     // Thread: for reading from server
-    thread::spawn(move || {
+    tokio::spawn(async move {
         let mut buffer = [0; 512];
         loop {
-            match read_stream.read(&mut buffer) {
+            match reader.read(&mut buffer).await {
                 Ok(0) => {
-                    let _ = server_tx.send("Server closed connections".into());
+                    let _ = server_tx.send("Server closed connections".into()).await;
                     break;
                 }
                 Ok(bytes_read) => {
@@ -50,7 +52,7 @@ fn main() -> std::io::Result<()> {
                     let _ = stdout().flush();
                 }
                 Err(_) => {
-                    let _ = server_tx.send("Connection error".into());
+                    let _ = server_tx.send("Connection error".into()).await;
                     break;
                 }
             }
@@ -58,7 +60,7 @@ fn main() -> std::io::Result<()> {
     });
 
     // Thread: for reading user input
-    thread::spawn(move || {
+    tokio::spawn(async move {
         loop {
             let mut input = String::new();
             if stdin().read_line(&mut input).is_err() {
@@ -66,30 +68,28 @@ fn main() -> std::io::Result<()> {
             }
 
             if input.trim().eq_ignore_ascii_case("quit") {
-                let _ = input_tx.send("quit".into());
+                let _ = input_tx.send("quit".into()).await;
                 break;
             }
 
-            let _ = input_tx.send(input);
+            let _ = input_tx.send(input).await;
         }
     });
 
     // Main thread: continuously tracking for exiting msg from channels
     loop {
-        if let Ok(server_msg) = main_rx.try_recv() {
+        if let Some(server_msg) = main_rx.recv().await {
             println!("{server_msg}");
             break;
         }
 
-        if let Ok(input_msg) = input_rx.try_recv() {
+        if let Some(input_msg) = input_rx.recv().await {
             if input_msg.trim().eq_ignore_ascii_case("quit") {
                 println!("Leaved Server");
                 break;
             }
-            stream.write_all(input_msg.as_bytes())?;
+            writer.write_all(input_msg.as_bytes()).await?;
         }
-
-        thread::sleep(std::time::Duration::from_millis(50));
     }
 
     Ok(())
