@@ -1,6 +1,6 @@
 use std::{net::SocketAddr, sync::Arc};
 
-use rust_chat_server::{boardcast_leave_notification, boardcast_msg_and_store, fmt_username};
+use rust_chat_server::utils::handle;
 use tokio::{
     io::AsyncReadExt,
     net::{TcpListener, tcp::OwnedWriteHalf},
@@ -30,7 +30,7 @@ async fn main() -> std::io::Result<()> {
             let mut buffer = [0; 512];
 
             // Read client's username
-            let username = fmt_username(&clients, &mut reader).await;
+            let username = handle::fmt_username(&clients, &mut reader).await;
             println!("New client [{}] connected!", username);
 
             loop {
@@ -39,13 +39,14 @@ async fn main() -> std::io::Result<()> {
                     Ok(bytes_read) => {
                         let input = String::from_utf8_lossy(&buffer[..bytes_read]);
 
-                        boardcast_msg_and_store(&clients, username.clone(), &input, addr).await;
+                        handle::boardcast_msg_and_store(&clients, username.clone(), &input, addr)
+                            .await;
                     }
                     Err(_) => break,
                 }
             }
 
-            boardcast_leave_notification(&clients, addr, &username).await;
+            handle::boardcast_leave_notification(&clients, addr, &username).await;
         });
     }
 
