@@ -78,17 +78,19 @@ async fn main() -> std::io::Result<()> {
 
     // Main thread: continuously tracking for exiting msg from channels
     loop {
-        if let Some(server_msg) = main_rx.recv().await {
-            println!("{server_msg}");
-            break;
-        }
-
-        if let Some(input_msg) = input_rx.recv().await {
-            if input_msg.trim().eq_ignore_ascii_case("quit") {
-                println!("Leaved Server");
+        tokio::select! {
+            Some(server_msg) = main_rx.recv() => {
+                println!("{server_msg}");
                 break;
+            },
+
+            Some(input_msg) = input_rx.recv() => {
+                if input_msg.trim().eq_ignore_ascii_case("quit") {
+                    println!("Leaved Server");
+                    break;
+                }
+                writer.write_all(input_msg.as_bytes()).await?;
             }
-            writer.write_all(input_msg.as_bytes()).await?;
         }
     }
 
